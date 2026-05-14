@@ -10,7 +10,7 @@ defmodule AlertMedia.BroadwayPipeline do
       name: __MODULE__,
       producer: [
         module: {BroadwaySQS.Producer, queue_url: @queue_url, receive_interval: 100},
-        concurrency: 25
+        concurrency: 50
       ],
       processors: [
         default: [concurrency: 50]
@@ -19,7 +19,7 @@ defmodule AlertMedia.BroadwayPipeline do
         deliveries: [
           batch_size: 500,
           batch_timeout: 100,
-          concurrency: 5
+          concurrency: 10
         ]
       ]
     )

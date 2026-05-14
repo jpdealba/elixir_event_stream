@@ -8,11 +8,11 @@ config :alert_media, AlertMedia.Repo,
   password: "postgres",
   hostname: "localhost",
   port: 5432,
-  # Fórmula por nodo: batcher_concurrency + headroom API (p. ej. 5 + 10 = 15).
+  # Fórmula por nodo: batcher_concurrency + headroom API (10 + 10 = 20).
   # Cada batcher usa 1 conexión Postgres (insert_all delivery_logs).
   # Nodos soportados por instancia RDS = max_connections / pool_size:
-  #   db.t3.small  (~34)  → 2 nodos | db.t3.medium (~170) → 11 | db.t3.large (~340) → 22
-  pool_size: 15
+  #   db.t3.small  (~34)  → 1 nodo | db.t3.medium (~170) → 8 | db.t3.large (~340) → 17
+  pool_size: 20
 
 config :alert_media, :sqs_queue_url, "http://localhost:4566/000000000000/alerts"
 

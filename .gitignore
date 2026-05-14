@@ -1,0 +1,35 @@
+# Mix / Elixir
+/_build/
+/cover/
+/deps/
+/doc/
+/.fetch
+erl_crash.dump
+*.ez
+alert_media-*.tar
+
+# Ecto (SQLite local)
+*.sqlite3
+
+# Secrets y entorno local (no subir credenciales)
+/config/*.secret.exs
+.env
+.env.*
+!.env.example
+
+# Logs y temporales
+*.log
+/tmp/
+
+# IDE / LSP
+.elixir_ls/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini

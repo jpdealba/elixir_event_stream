@@ -10,11 +10,17 @@ defmodule AlertMedia.BroadwayPipeline do
       name: __MODULE__,
       producer: [
         module: {BroadwaySQS.Producer, queue_url: @queue_url, receive_interval: 100},
-        concurrency: 100
+        concurrency: 25
       ],
-      processors: [default: [concurrency: 200]],
+      processors: [
+        default: [concurrency: 50]
+      ],
       batchers: [
-        deliveries: [batch_size: 500, batch_timeout: 200, concurrency: 5]
+        deliveries: [
+          batch_size: 500,
+          batch_timeout: 100,
+          concurrency: 5
+        ]
       ]
     )
   end
@@ -28,9 +34,6 @@ defmodule AlertMedia.BroadwayPipeline do
 
   @impl Broadway
   def handle_batch(:deliveries, messages, _, _) do
-    # Fan-out: cada mensaje SQS es un recipient → expandir a sus canales
-    # Mensajes iniciales no tienen :channel → procesar los 3 canales
-    # Mensajes de retry sí tienen :channel → procesar solo ese canal
     deliveries =
       Enum.flat_map(messages, fn msg ->
         channels =
@@ -44,52 +47,36 @@ defmodule AlertMedia.BroadwayPipeline do
         end)
       end)
 
-    {send_us, {ok, failed}} =
-      :timer.tc(fn ->
-        deliveries
-        |> Enum.map(fn {aid, rid, ch, attempt} -> {{aid, rid, ch, attempt}, fake_send()} end)
-        |> Enum.split_with(fn {_, r} -> r == :ok end)
-      end)
+    {ok, failed} =
+      deliveries
+      |> Enum.map(fn delivery -> {delivery, fake_send()} end)
+      |> Enum.split_with(fn {_, r} -> r == :ok end)
 
     {failed_final, failed_retry} =
       Enum.split_with(failed, fn {{_, _, _, attempt}, _} -> attempt >= @max_attempts end)
 
     now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+    bulk_insert(ok, "delivered", now)
+    bulk_insert(failed_final, "failed", now)
 
-    {insert_us, _} =
-      :timer.tc(fn ->
-        bulk_insert(ok, "delivered", now)
-        bulk_insert(failed_final, "failed", now)
+    Logger.info("[pipeline] #{length(deliveries)} deliveries — #{length(ok)} ok, #{length(failed_final)} failed, #{length(failed_retry)} retry")
+
+    unless failed_retry == [] do
+      failed_retry
+      |> Enum.map(fn {{aid, rid, ch, attempt}, _} ->
+        [
+          id: "#{rid}-#{ch}",
+          message_body: Jason.encode!(%{alert_id: aid, recipient_id: rid, channel: ch, attempt: attempt + 1})
+        ]
       end)
-
-    {retry_us, _} =
-      :timer.tc(fn ->
-        unless failed_retry == [] do
-          failed_retry
-          |> Enum.map(fn {{aid, rid, ch, attempt}, _} ->
-            [
-              id: "#{rid}-#{ch}",
-              message_body:
-                Jason.encode!(%{
-                  alert_id: aid,
-                  recipient_id: rid,
-                  channel: ch,
-                  attempt: attempt + 1
-                })
-            ]
-          end)
-          |> Enum.chunk_every(10)
-          |> Task.async_stream(
-            &(ExAws.SQS.send_message_batch(@queue_url, &1) |> ExAws.request!()),
-            max_concurrency: 50,
-            ordered: false
-          )
-          |> Stream.run()
-        end
-      end)
-
-    alert_id = hd(messages).data.alert_id
-    AlertMedia.Progress.add_timing(alert_id, send_us, insert_us, retry_us)
+      |> Enum.chunk_every(10)
+      |> Task.async_stream(
+        &(ExAws.SQS.send_message_batch(@queue_url, &1) |> ExAws.request!()),
+        max_concurrency: 50,
+        ordered: false
+      )
+      |> Stream.run()
+    end
 
     messages
   end
@@ -99,23 +86,13 @@ defmodule AlertMedia.BroadwayPipeline do
   defp bulk_insert(deliveries, status, now) do
     logs =
       Enum.map(deliveries, fn {{alert_id, recipient_id, channel, _}, _} ->
-        %{
-          alert_id: alert_id,
-          recipient_id: recipient_id,
-          channel: channel,
-          status: status,
-          inserted_at: now
-        }
+        %{alert_id: alert_id, recipient_id: recipient_id, channel: channel, status: status, inserted_at: now}
       end)
 
     AlertMedia.Repo.insert_all(AlertMedia.DeliveryLog, logs,
       on_conflict: :nothing,
       conflict_target: [:alert_id, :recipient_id, :channel]
     )
-
-    logs
-    |> Enum.group_by(& &1.alert_id)
-    |> Enum.each(fn {alert_id, group} -> AlertMedia.Progress.track(alert_id, length(group)) end)
   end
 
   defp fake_send do

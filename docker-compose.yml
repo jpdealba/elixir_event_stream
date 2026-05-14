@@ -1,8 +1,8 @@
 services:
   sqs:
-    image: softwaremill/elasticmq-native
+    image: floci/floci:latest
     ports:
-      - "9324:9324"
+      - "4566:4566"
 
   postgres:
     image: postgres:16-alpine
